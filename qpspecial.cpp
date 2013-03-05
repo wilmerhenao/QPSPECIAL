@@ -1,3 +1,4 @@
+
 /*
   This function sets up the solution of the QP problem
   min             q(x)   = || G*x ||_2^2 = x'*(G'*G)*x
@@ -12,33 +13,35 @@
 #include <iostream>
 #include <vector>
 
-extern "C" void dpotrf(char *UPLO, int* N, double* A, int* LDA, int* INFO);
+extern "C" int dpotrf_(char *UPLO, int* N, double* A, int* LDA, int* INFO);
 
-
-
+// extern "C" int dpotrf_(char *uplo, int *n, double *a, int *lda, int *info);
 int main(){
   char uplo = 'U';
   int n = 3;    
-  int LDA = 2;
-  int info = 0;
-
+  int LDA = n;
+  int info;
+  int ret;
+  
   std::vector<double> A;
-
+  
   A.push_back(2);
   A.push_back(-1);
   A.push_back(0);
+  
   A.push_back(-1);
   A.push_back(2);
   A.push_back(-1);
+  
   A.push_back(0);
   A.push_back(-1);
   A.push_back(2);
-
-  dpotrf(&uplo, &n, & *A.begin(), &LDA, &info);
-
+  
+  ret = dpotrf_(&uplo, &n, & *A.begin(), &LDA, &info);
+  if (0 == ret){
   std::cout << "solution is:";    
   std::cout << "[" << A[0] << ", " << A[1] << ", " << "]" << std::endl;
   std::cout << "Info = " << info << std::endl; 
-
+  }
   return(0);
 }
