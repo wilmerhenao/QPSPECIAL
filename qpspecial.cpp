@@ -37,30 +37,32 @@ extern "C" int spotrf_(char *UPLO, int* N, float* A, int* LDA, int* INFO);
 extern "C" int dgetrs_(char*, int*, int*, double*, int*, int*, double*, int*, int*);
 extern "C" int sgetrs_(char*, int*, int*, float*, int*, int*, float*, int*, int*);
 // LAPACK function overloading
-void mmul_(char *transA, char *transB, int* M, int* N,int* K, double* alpha, double*& A,
-	   int* LDA, std::vector<double>& B, int* LDB, double* beta, 
-	   std::vector<double>& C, int* LDC){
-  dgemm_(transA, transB, M, N, K, alpha, A, LDA, & *B.begin(), LDB, beta,
-	 & *C.begin(), LDC);
+void mmul_(char transA, char transB, int M, int N,int K, double alpha, double*& A,
+	   int LDA, std::vector<double>& B, int LDB, double beta, 
+	   std::vector<double>& C, int LDC){
+  double* pB = &*B.begin();
+  double* pC = &*C.begin();
+  dgemm_(&transA, &transB, &M, &N, &K, &alpha, A, &LDA, pB, &LDB, &beta,
+	 pC, &LDC);
 }
 
-void mmul_(char *transA, char *transB, int* M, int* N,int* K, float* alpha, float* A,
-	   int* LDA, std::vector<float>& B, int* LDB, float* beta, 
-	   std::vector<float>& C, int* LDC){
-  sgemm_(transA, transB, M, N, K, alpha, A, LDA, & *B.begin(), LDB, beta, 
-	 & *C.begin(), LDC);
+void mmul_(char transA, char transB, int M, int N,int K, float alpha, float* A,
+	   int LDA, std::vector<float>& B, int LDB, float beta, 
+	   std::vector<float>& C, int LDC){
+  sgemm_(&transA, &transB, &M, &N, &K, &alpha, A, &LDA, & *B.begin(), &LDB, &beta, 
+	 & *C.begin(), &LDC);
 }
 
-void mmul_(char *transA, char *transB, int* M, int* N,int* K, double* alpha, double*& A,
-	   int* LDA, double* B, int* LDB, double* beta, 
-	   double* C, int* LDC){
-  dgemm_(transA, transB, M, N, K, alpha, A, LDA, B, LDB, beta, C, LDC);
+void mmul_(char transA, char transB, int M, int N,int K, double alpha, double*& A,
+	   int LDA, double* B, int LDB, double beta, 
+	   double* C, int LDC){
+  dgemm_(&transA, &transB, &M, &N, &K, &alpha, A, &LDA, B, &LDB, &beta, C, &LDC);
 }
 
-void mmul_(char *transA, char *transB, int* M, int* N,int* K, float* alpha, float* A,
-	   int* LDA, float* B, int* LDB, float* beta, 
-	   float* C, int* LDC){
-  sgemm_(transA, transB, M, N, K, alpha, A, LDA, B, LDB, beta, C, LDC);
+void mmul_(char transA, char transB, int M, int N,int K, float alpha, float*& A,
+	   int LDA, float* B, int LDB, float beta, 
+	   float* C, int LDC){
+  sgemm_(&transA, &transB, &M, &N, &K, &alpha, A, &LDA, B, &LDB, &beta, C, &LDC);
 }
 
 double norm_(char* A, int* B, int* C, double*& D, int* E, double* F){
@@ -88,6 +90,17 @@ int solve_(char& A, int* B, int* C, float*& D, int* E, int*& F, float* G, int* H
 	   int* I){
   return(sgetrs_(&A, B, C, D, E, F, G, H, I));
 }
+
+/*
+template<typename T>
+void vecCopy(std::vector<T>& A, std::vector<T>& B){
+  // This function will create a deep copy of A in B
+  typename std::vector<T>::iterator it;
+  for(it = A.begin(); it != A.end(); it++){
+    std::cout << "copying " << *it << std::endl;
+    B.push_back((T)*it);
+  }
+  }*/
 
 // T can only be float or less than double though.  No higher prec. allowed.
 template<typename T>
@@ -138,6 +151,14 @@ qpclass<T>::qpclass(int m0, int n0, T*& G0, int maxit0){
   for(int i = 0; i < n; i++)
     e.push_back( 1.0/(T)n );
   x = e;
+
+  typename std::vector<T>::iterator ite;
+  for(ite = x.begin(); ite != x.end(); ite++){
+    std::cout << *ite << " " << std::endl;
+    std::cout << &(*ite) << " " << &*e.begin() << std::endl;
+  }
+
+
   fillGfromPointer(G0);
   Q = new T[n * n]; // initialize Q (needs to be zero at the beginning)
   for (int i = 0; i < n; i++){
@@ -178,7 +199,7 @@ void qpclass<T>::HessianfromG(){
   char transA = 'T';
   char transB = 'N';
   T alpha = 1.0, beta = 0.0;
-  mmul_(&transA, &transB, &n, &n, &m, &alpha, G, &m, G, &m, &beta, Q, &n);
+  mmul_(transA, transB, n, n, m, alpha, G, m, G, m, beta, Q, n);
 }
 
 template<typename T>
@@ -208,7 +229,7 @@ int qpclass<T>::iterativePhase(){
   char uplo = 'U';
   T alpha = 1.0, beta = 0.0, muaff = 0.0, sig = 0.0;
   int one = 1, ret;
-
+  
   //parameters for interior point method
   std::vector<T> temp;
   std::fill(temp.begin(), temp.end(), 0.0);
@@ -217,7 +238,7 @@ int qpclass<T>::iterativePhase(){
   int k;
   typename std::vector<T>::iterator itx = x.begin();
   for(k = 0; k < maxit; k++){
-    mmul_(&nTrans, &nTrans, &n, &one, &n, &alpha, Q, &n, x, &n, &beta, temp, &n);
+    mmul_(nTrans, nTrans, n, one, n, alpha, Q, n, x, n, beta, temp, n);
     typename std::vector<T>::iterator itemp = temp.begin();
     typename std::vector<T>::iterator ite = e.begin();
     typename std::vector<T>::iterator itz = z.begin();
@@ -374,7 +395,7 @@ int qpclass<T>::iterativePhase(){
   for(itx = x.begin(); itx != x.end(); itx++)
     (*itx) /= sumx;
   d = x;
-  mmul_(&nTrans, &nTrans, &m, &one, &n, &alpha, G, &n, x, &n, &beta, d, &n);
+  mmul_(nTrans, nTrans, m, one, n, alpha, G, n, x, n, beta, d, n);
   q = dotprod(d, d);
   return(0);
 }
