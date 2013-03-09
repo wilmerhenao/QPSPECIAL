@@ -91,6 +91,14 @@ int solve_(char& A, int* B, int* C, float*& D, int* E, int*& F, float* G, int* H
   return(sgetrs_(&A, B, C, D, E, F, G, H, I));
 }
 
+template<typename T>
+void deepCopyvec(T* A, T* B, int n){
+  //Makes a deep copy from vector A to vector B.  Assumes memory has been allocated
+  for (int i = 0; i < n; i++){
+    B[i] = A[i];
+  }
+}
+
 /*
 template<typename T>
 void vecCopy(std::vector<T>& A, std::vector<T>& B){
@@ -110,12 +118,11 @@ private:
   T eta, delta, mu0, tolmu, tolrs, kmu, nQ, krs, ap, ad, y, q;
   // G points to the matrix G that will be passed to us. e is a vector of ones.
   int info;
-  T *G, *Q, *QD;
-  std::vector<T> x, e, z, d;
+  T *G, *Q, *QD, *x, *e, *z, *d;
 public:
   qpclass(int, int, T*&, int);
   ~qpclass();
-  T dotprod(std::vector<T> a, std::vector<T> b);
+  T dotprod(T* a, T* b);
   void copyQD();
   void fillGfromPointer(T*);
   void HessianfromG();
@@ -124,6 +131,7 @@ public:
   int iterativePhase();
   void printSolution();
 };
+
 template<typename T>
 qpclass<T>::qpclass(int m0, int n0, T*& G0, int maxit0){
   m = m0;
@@ -148,16 +156,10 @@ qpclass<T>::qpclass(int m0, int n0, T*& G0, int maxit0){
     std::cerr << "The matrix is empty"<< std::endl;
     exit(EXIT_FAILURE);
   }
+  x = new T[n]; e = new T[n]; z = new T[n]; d = new T[n];
+
   for(int i = 0; i < n; i++)
-    e.push_back( 1.0/(T)n );
-  x = e;
-
-  typename std::vector<T>::iterator ite;
-  for(ite = x.begin(); ite != x.end(); ite++){
-    std::cout << *ite << " " << std::endl;
-    std::cout << &(*ite) << " " << &*e.begin() << std::endl;
-  }
-
+    e[i] = z[i] = d[i] = x[i] = ( 1.0/(T)n );
 
   fillGfromPointer(G0);
   Q = new T[n * n]; // initialize Q (needs to be zero at the beginning)
@@ -166,25 +168,27 @@ qpclass<T>::qpclass(int m0, int n0, T*& G0, int maxit0){
       Q(i, j) = Q(j, i) = 0.0; //saving a pass
     }
   }
-  z = x;
   mu0 = dotprod(x, z);
   mu0 /= T(n);
   kmu = tolmu * mu0;
-  d = x;
   m = m0;
 }
 
 template<typename T>
 qpclass<T>::~qpclass(){ 
   delete [] Q;
+  delete [] QD;
+  delete [] x;
+  delete [] e;
+  delete [] z;
+  delete [] d;
 }
 
 template<typename T>
-T qpclass<T>::dotprod(std::vector<T> a, std::vector<T> b){
+T qpclass<T>::dotprod(T* a, T* b){
   T res = 0.0;
-  typename std::vector<T>::iterator bit = b.begin();
-  for(typename std::vector<T>::iterator ait = a.begin(); ait!=a.end(); ++ait,++bit){
-    res += *ait * (*bit);
+  for(int i = 0; i < n; ++i){
+    res += a[i] * b[i];
   }
   return(res);
 }
@@ -231,50 +235,32 @@ int qpclass<T>::iterativePhase(){
   int one = 1, ret;
   
   //parameters for interior point method
-  std::vector<T> temp;
-  std::fill(temp.begin(), temp.end(), 0.0);
-  std::vector<T> r1 = temp, r3 = temp, KT = e;
-  std::vector<T> zdx = temp, p = temp;
-  int k;
-  typename std::vector<T>::iterator itx = x.begin();
+  T* temp = new T[n];
+  T *r1 = new T[n], *r3 = new T[n], *KT = new T[n];
+  T *zdx = new T[n], *p = new T[n];
+  int k, i;
   for(k = 0; k < maxit; k++){
     mmul_(nTrans, nTrans, n, one, n, alpha, Q, n, x, n, beta, temp, n);
-    typename std::vector<T>::iterator itemp = temp.begin();
-    typename std::vector<T>::iterator ite = e.begin();
-    typename std::vector<T>::iterator itz = z.begin();
-    typename std::vector<T>::iterator itr3 = r3.begin();
-    typename std::vector<T>::iterator itp = p.begin();
-    typename std::vector<T>::iterator itr1;
-    typename std::vector<T>::iterator itr4;
-    typename std::vector<T>::iterator itzdx;
-    typename std::vector<T>::iterator itr7;
-    typename std::vector<T>::iterator itdx;
-    typename std::vector<T>::iterator itdz;
-    for(itr1 = r1.begin(); itr1 != r1.end(); 
-	itr1++, itemp++, ite++, itz++, itr3++){
-      *itr1 += -(*itemp) + (*ite) * y + (*itz);
-      rs = MAX(*itr1, rs);
-      r2 += (*itx);
-      *itr3 = -((*itx) * (*itz));
-      mu -= *itr3;
+    for(i = 0; i < n; i++){
+      r1[i] += -temp[i] + e[i] * y + z[i]; //residual
+      rs = MAX(r1[i], rs);
+      r2 += x[i]; //residual
+      r3[i] = -(x[i] * z[i]); //slacks
+      mu -= r3[i]; //current mu
     }
-    rs = MAX(r2, rs); mu /= n;
-
+    rs = MAX(r2, rs); mu /= n; // residual norm
+    
+    /* Stopping if mu and the residual norm is small enough.  All went well */
     if(mu < kmu){
       if(rs < krs){
 	return(0); // succesful execution
       }
     }
     
-    itz = z.begin();
-    itx = x.begin();
-    
-    int i = 0;
     copyQD();
-    for(itzdx = zdx.begin(); itzdx != zdx.end(); 
-	itzdx++, itz++, itx++, i++){
-      *itzdx = (*itz) / (*itx);
-      QD(i, i) += (*itzdx);
+    for(i = 0; i < n; i++){
+      zdx[i] = z[i] / x[i]; //factorization
+      QD(i, i) += zdx[i];
     }
     
     // Perform Cholesky factorization on QD
@@ -289,111 +275,101 @@ int qpclass<T>::iterativePhase(){
     M = dotprod(KT, KT); // might need to make KT members of the class later?
 
     /* Compute approximate tangent direction using factorization from above */
-    std::vector<T> r4 = r1;
-    std::vector<T> dx = r1; //r1 just for the size of the vector, not for the values
-    std::vector<T> dz = r1;
-    itr3 = r3.begin(); itx = x.begin();      
+    T* r4 = new T[n];
+    T* dx = new T[n]; //r1 just for the size of the vector, not for the values
+    T* dz = new T[n];
+    deepCopyvec(r1, r4); deepCopyvec(r1, dx); deepCopyvec(r1, dz); //...not necessar
     
-    for(itr4 = r4.begin(); itr4 != r4.end(); itr4++, itr3++)
-      *itr4 += (*itr3 / *itx); 
-
-    std::vector<T> r7 = r4; // It needs to be started here because r4 will be destroyed
+    for(i = 0; i < n; i++)
+      r4[i] += r3[i] / x[i];
+    
+    T* r7 = new T[n]; // It needs to be started here because r4 will be destroyed
     // next r4 keeps a temporary solution to a system.  So the original r4 ist kaput
     // This is a really bad practice but saves me a lot of memory
+    deepCopyvec(r4, r7);
     ret = solve_(yTrans, &n, &one, QD, &n, ipiv, & *r4.begin(), &n, &info);
     r5 = dotprod(KT, r4);
     r6 = r2 + r5;
     dy = -r6 / M;
-    ite = e.begin();
+    
+    for(i = 0; i < n; i++)
+      r7[i] += e[i] * dy;
 
-    for(itr7 = r7.begin(); itr7 != r7.end(); itr7++, ite++)
-      *itr7 += *ite * dy;
     ret = solve_(yTrans, &n, &one, QD, &n, ipiv, & *r7.begin(), &n, &info);
     ret = solve_(nTrans, &n, &one, QD, &n, ipiv, & *r7.begin(), &n, &info);
-    dx = r7;
-    itr3 = r3.begin();
-    itz = z.begin();
-    itx = x.begin();
-    itdz = dz.begin();
-    for(itdx = dx.begin(); itdx != dx.end(); itdx++, itr3++, itz++, itx++, itdz++)
-      *itdz = (*itr3 - *itz * (*itdx))/(*itx);
+    deepCopyvec(r7, dx);
+    for(i = 0; i < n; i++)
+      dz[i] = (r3[i] - z[i] * dx[i])/x[i];
     /*
       Determine maximal step possible in the approx. tangent direction here primal step
       size
     */
-    itx = x.begin(); itdx = dx.begin(); ap = 1.0;
-    itz = z.begin(); itdz = dz.begin(); ad = 1.0;
-    for(itp = p.begin(); itp != p.end(); itp++, itx++, itdx++){
-      *itp = -(*itx) / *itdx;
-      if(*itp > 0 )
-	ap = MIN(*itp, ap);
-      *itp = -(*itz) / (*itdz);     /* Dual step size */
-      if(*itp > 0)  //Using different step sizes in primal and dual improves pfmnce a
-	ad = MIN(*itp, ad); //bit
+    ap = 1.0; ad = 1.0;
+    for(i = 0; i < n; i++){
+      p[i] = -x[i] / dx[i];
+      if(p[i] > 0 )
+	ap = MIN(p[i], ap);
+      p[i] = -z[i] / dz[i];     /* Dual step size */
+      if(p[i] > 0)  //Using different step sizes in primal and dual improves pfmnce a
+	ad = MIN(p[i], ad); //bit
     }
     /* Heuristic for the centering paramater */
-    itz = z.begin(); itdx = dx.begin(); itdz = dz.begin();
-    for(itx = x.begin(); itx != x.end(); itx++, itz++, itdx++, itdz++){
-      muaff += ((*itx) + (ap * (*itdx))) * ((*itz) + (ad * (*itdz)));
+
+    for(i = 0; i < n; i++){
+      muaff += (x[i] + (ap * dx[i])) * (z[i] + (ad * dz[i]));
     }
-    muaff /= (T)n;
+    muaff /= (T) n;
     /*
       Compute the new corrected search direction that now includes the appropriate
       amount of centering and mehrotras second order correction term (see r3).  We
       of course reuse the factorization from above
     */
     sig = std::pow((muaff / mu), delta);
-    itr3 = r3.begin(); itdx = dx.begin();
-    itr4 = r4.begin(); itdz = dz.begin();
-    itr1 = r1.begin(); itx = x.begin();
-    for(itr3 = r3.begin(); itr3 != r3.end(); itr3++, itdx++, itr4++, itdz++, itr1++,
-	  itx++){
-      (*itr3) += sig * mu - (*itdx) * (*itdz);
-      (*itr4) = (*itr1) + (*itr3) / (*itx);
+    for(i = 0; i < n; i++){
+      r3[i] += sig * mu - dx[i] * dz[i];
+      r4[i] = r1[i] + r3[i] / x[i];
     }
-    r7 = r4;
+    deepCopyvec(r4, r7);
     ret = solve_(yTrans, &n, &one, QD, &n, ipiv, & *r4.begin(), &n, &info);
     r5 = dotprod(KT, r4);
     r6 = r2 + r5;
     dy = -r6 / M;
-    ite = e.begin();
-    for( itr7 = r7.begin(); itr7 != r7.end(); itr7++, ite++)
-      *itr7 += *ite * dy; //(r7 = r4 + e*dy) -- It is a little cryptic over here!
+
+    for(i = 0; i < n; i++)
+      r7[i] += e[i] * dy; //(r7 = r4 + e*dy) -- It is a little cryptic over here!
     ret = solve_(yTrans, &n, &one, QD, &n, ipiv, & *r7.begin(), &n, &info);
     ret = solve_(nTrans, &n, &one, QD, &n, ipiv, & *r7.begin(), &n, &info);
-    dx = r7;
-    itr3 = r3.begin(); itz = z.begin(); itx = x.begin(); itdz = dz.begin();
-    for(itdx = dx.begin(); itdx != dx.end(); itdx++, itr3++, itz++, itx++, itdz++)
-      *itdz = (*itr3 - *itz * (*itdx))/(*itx);
+    deepCopyvec(r7, dx);
+    for(i = 0; i < n; i++)
+      dz[i] = (r3[i] - z[i] * dx[i])/x[i];
     /* Determine maximal step possible in the new direction here primal step size */
-    itx = x.begin(); itdx = dx.begin(); ap = 1.0;
-    itz = z.begin(); itdz = dz.begin(); ad = 1.0;
-    for(itp = p.begin(); itp != p.end(); itp++, itx++, itdx++){
-      *itp = -(*itx) / *itdx;
-      if(*itp > 0 )
-	ap = MIN(*itp, ap);
-      *itp = -(*itz) / (*itdz);     /* Dual step size */
-      if(*itp > 0)  //Using different step sizes in primal and dual improves pfmnce a
-	ad = MIN(*itp, ad); //bit
+    ap = 1.0; ad = 1.0;
+    for(i = 0; i < n; i++){
+      p[i] = -(x[i]) / dx[i];
+      if(p[i] > 0 )
+	ap = MIN(p[i], ap);
+      p[i] = -(z[i]) / (dz[i]);     /* Dual step size */
+      if(p[i] > 0)  //Using different step sizes in primal and dual improves pfmnce a
+	ad = MIN(p[i], ad); //bit
     }
     /* Update variables primal dual multipliers dual slacks */
-    itx = x.begin(); itdx = dx.begin(); itdz = dz.begin();
-    for(itz = z.begin(); itz != z.end(); itx++, itz++, itdx++, itdz++){
-      (*itx) += eta * ap * (*itdx);    
+
+    for(i = 0; i < n; i++){
+      x[i] += eta * ap * dx[i];    
       y += eta * ad * dy;
-      (*itz) += eta * ad * (*itdz);
+      z[i] += eta * ad * dz[i];
     }
   }
   if (maxit == k){
     return(1);
   }
   T sumx = 0.0;
-  for(itx = x.begin(); itx != x.end(); itx++){
-    (*itx) = MAX((*itx), 0.0);
-    sumx += (*itx);
+  for(i = 0; i < n; i++){
+    x[i] = MAX(x[i], 0.0);
+    sumx += x[i];
   }
-  for(itx = x.begin(); itx != x.end(); itx++)
-    (*itx) /= sumx;
+  for(i = 0; i < n; i++)
+    x[i] /= sumx;
   d = x;
   mmul_(nTrans, nTrans, m, one, n, alpha, G, n, x, n, beta, d, n);
   q = dotprod(d, d);
