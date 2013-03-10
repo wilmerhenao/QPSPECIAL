@@ -22,6 +22,7 @@
 #define G(i, j)           G[INDEXCM(i, j)]
 #define Q(i, j)           Q[INDEXCM(i, j)]
 #define QD(i, j)          QD[INDEXCM(i, j)]
+#define QL(i, j)          QL[INDEXCM(i, j)]
 #define MAX(A,B)          ((A) > (B)) ? (A) : (B)
 #define MIN(A,B)          ((A) > (B)) ? (B) : (A)
 #define ABS(A)            ((A) >= 0) ? (A) : -(A)
@@ -34,8 +35,8 @@ extern "C" double dlange_(char*, int*, int*, double*, int*, double* );
 extern "C" float slange_(char*, int*, int*, float*, int*, float*);
 extern "C" int dpotrf_(char *UPLO, int* N, double* A, int* LDA, int* INFO);
 extern "C" int spotrf_(char *UPLO, int* N, float* A, int* LDA, int* INFO);
-extern "C" int dgetrs_(char*, int*, int*, double*, int*, int*, double*, int*, int*);
-extern "C" int sgetrs_(char*, int*, int*, float*, int*, int*, float*, int*, int*);
+extern "C" int dgesv_(int*, int*, double*, int*, int*, double*, int*, int*);
+extern "C" int sgesv_(int*, int*, float*, int*, int*, float*, int*, int*);
 // LAPACK function overloading
 void mmul_(char transA, char transB, int M, int N,int K, double alpha, double*& A,
 	   int LDA, std::vector<double>& B, int LDB, double beta, 
@@ -73,22 +74,44 @@ float norm_(char* A, int* B, int* C, float*& D, int* E, float* F){
   return(slange_(A, B, C, D, E, F));
 }
 
-int cholesky_(char &UPLO, int* N, double*& A, int* LDA, int* INFO){
-  return(dpotrf_(&UPLO, N, A, LDA, INFO));
+void cholesky_(char &UPLO, int* N, double*& A, int* LDA, int* INFO){
+  dpotrf_(&UPLO, N, A, LDA, INFO);
+  // fill the lower part with zeroes
+  if ('U' == UPLO){
+    for (int i = 1; i < *N; i++){
+      for (int j = 0; j < i; j++)
+	A[j * (*N) + i] = 0.0;
+    }
+  } else { // or the upper part if it's 'L'
+    for (int i = 0; i < (*N - 1); i++){
+      for (int j = i + 1; j < *N; j++)
+	A[j * (*N) + i] = 0.0;
+    }
+  }
 }
 
-int cholesky_(char &UPLO, int* N, float*& A, int* LDA, int* INFO){
-  return(spotrf_(&UPLO, N, A, LDA, INFO));
+void cholesky_(char &UPLO, int* N, float*& A, int* LDA, int* INFO){
+  spotrf_(&UPLO, N, A, LDA, INFO);
+  // fill the lower part with zeroes
+  if ('U' == UPLO){
+    for (int i = 1; i < *N; i++){
+      for (int j = 0; j < i; j++)
+	A[j * (*N) + i] = 0.0;
+    }
+  } else { // or the upper part if it's 'L'
+    for (int i = 0; i < (*N - 1); i++){
+      for (int j = i + 1; j < *N; j++)
+	A[j * (*N) + i] = 0.0;
+    }
+  }
 }
 
-int solve_(char& A, int* B, int* C, double*& D, int* E, int*& F, double* G, int* H, 
-	   int* I){
-  return(dgetrs_(&A, B, C, D, E, F, G, H, I));
+void solve_(int B, int C, double*& D, int E, int* F, double* G, int H, int I){
+  dgesv_(&B, &C, D, &E, F, G, &H, &I);
 }
 
-int solve_(char& A, int* B, int* C, float*& D, int* E, int*& F, float* G, int* H, 
-	   int* I){
-  return(sgetrs_(&A, B, C, D, E, F, G, H, I));
+void solve_(int B, int C, float*& D, int E, int* F, float* G, int H, int I){
+  sgesv_(&B, &C, D, &E, F, G, &H, &I);
 }
 
 template<typename T>
@@ -108,8 +131,8 @@ void vecCopy(std::vector<T>& A, std::vector<T>& B){
     std::cout << "copying " << *it << std::endl;
     B.push_back((T)*it);
   }
-  }*/
-
+}
+*/
 // T can only be float or less than double though.  No higher prec. allowed.
 template<typename T>
 class qpclass{
@@ -118,7 +141,7 @@ private:
   T eta, delta, mu0, tolmu, tolrs, kmu, nQ, krs, ap, ad, y, q;
   // G points to the matrix G that will be passed to us. e is a vector of ones.
   int info;
-  T *G, *Q, *QD, *x, *e, *z, *d;
+  T *G, *Q, *QD, *x, *e, *z, *d, *QL;
 public:
   qpclass(int, int, T*&, int);
   ~qpclass();
@@ -159,10 +182,12 @@ qpclass<T>::qpclass(int m0, int n0, T*& G0, int maxit0){
   x = new T[n]; e = new T[n]; z = new T[n]; d = new T[n];
 
   for(int i = 0; i < n; i++)
-    e[i] = z[i] = d[i] = x[i] = ( 1.0/(T)n );
+    e[i] = z[i] = d[i] = x[i] = 1.0;
 
   fillGfromPointer(G0);
   Q = new T[n * n]; // initialize Q (needs to be zero at the beginning)
+  QD = new T[n * n];
+  QL = new T[n * n];
   for (int i = 0; i < n; i++){
     for(int j = i; j < n; j++){
       Q(i, j) = Q(j, i) = 0.0; //saving a pass
@@ -219,7 +244,7 @@ template<typename T>
 void qpclass<T>::copyQD(){
   for (int i = 0; i < n; i++){
     for(int j = 0; j < n; j++){
-      QD(i, j) = Q(i, j);
+      QL(i, j) = QD(i, j) = Q(i, j);
     }
   }
 }
@@ -232,7 +257,7 @@ int qpclass<T>::iterativePhase(){
   char nTrans = 'N';
   char uplo = 'U';
   T alpha = 1.0, beta = 0.0, muaff = 0.0, sig = 0.0;
-  int one = 1, ret;
+  int one = 1;
   
   //parameters for interior point method
   T* temp = new T[n];
@@ -243,10 +268,10 @@ int qpclass<T>::iterativePhase(){
     mmul_(nTrans, nTrans, n, one, n, alpha, Q, n, x, n, beta, temp, n);
     for(i = 0; i < n; i++){
       r1[i] += -temp[i] + e[i] * y + z[i]; //residual
-      rs = MAX(r1[i], rs);
-      r2 += x[i]; //residual
+      rs = MAX(std::abs(r1[i]), rs);
+      r2 += x[i];             //residual
       r3[i] = -(x[i] * z[i]); //slacks
-      mu -= r3[i]; //current mu
+      mu -= r3[i];            //current mu
     }
     rs = MAX(r2, rs); mu /= n; // residual norm
     
@@ -260,25 +285,30 @@ int qpclass<T>::iterativePhase(){
     copyQD();
     for(i = 0; i < n; i++){
       zdx[i] = z[i] / x[i]; //factorization
-      QD(i, i) += zdx[i];
+      QL(i, i) = QD(i, i) += zdx[i];
     }
     
     // Perform Cholesky factorization on QD
-    ret = cholesky_(uplo, &n, QD, &n, &info);
-    assert(ret);
+    cholesky_(uplo, &n, QD, &n, &info);
+    if (0 != info)
+      return(2);
+    uplo = 'L';
+    cholesky_(uplo, &n, QL, &n, &info);
     if (0 != info)
       return(2);
     // Solve a system with QD and e (Notice that the solution will be stored in KT)
     int* ipiv = new int[n];
-    KT = e; // If I solve directly over e in the next step 'e' will be overwritten!
-    ret = solve_(yTrans, &n, &one, QD, &n, ipiv, & *KT.begin(), &n, &info);
+    deepCopyvec(e, KT, n); //If I solve directly over e in the next step 'e' will be 
+                           //overwritten!
+    solve_(n, one, QL, n, ipiv, KT, n, info);
+    std::cout << KT[0] << " " << KT[1] << std::endl;
     M = dotprod(KT, KT); // might need to make KT members of the class later?
 
     /* Compute approximate tangent direction using factorization from above */
     T* r4 = new T[n];
     T* dx = new T[n]; //r1 just for the size of the vector, not for the values
     T* dz = new T[n];
-    deepCopyvec(r1, r4); deepCopyvec(r1, dx); deepCopyvec(r1, dz); //...not necessar
+    deepCopyvec(r1, r4, n); deepCopyvec(r1, dx, n); deepCopyvec(r1, dz, n);
     
     for(i = 0; i < n; i++)
       r4[i] += r3[i] / x[i];
@@ -286,18 +316,18 @@ int qpclass<T>::iterativePhase(){
     T* r7 = new T[n]; // It needs to be started here because r4 will be destroyed
     // next r4 keeps a temporary solution to a system.  So the original r4 ist kaput
     // This is a really bad practice but saves me a lot of memory
-    deepCopyvec(r4, r7);
-    ret = solve_(yTrans, &n, &one, QD, &n, ipiv, & *r4.begin(), &n, &info);
+    deepCopyvec(r4, r7, n);
+    solve_(n, one, QL, n, ipiv, r4, n, info);
     r5 = dotprod(KT, r4);
     r6 = r2 + r5;
     dy = -r6 / M;
     
     for(i = 0; i < n; i++)
       r7[i] += e[i] * dy;
-
-    ret = solve_(yTrans, &n, &one, QD, &n, ipiv, & *r7.begin(), &n, &info);
-    ret = solve_(nTrans, &n, &one, QD, &n, ipiv, & *r7.begin(), &n, &info);
-    deepCopyvec(r7, dx);
+    
+    solve_(n, one, QL, n, ipiv, r7, n, info);
+    solve_(n, one, QD, n, ipiv, r7, n, info);
+    deepCopyvec(r7, dx, n);
     for(i = 0; i < n; i++)
       dz[i] = (r3[i] - z[i] * dx[i])/x[i];
     /*
@@ -329,17 +359,17 @@ int qpclass<T>::iterativePhase(){
       r3[i] += sig * mu - dx[i] * dz[i];
       r4[i] = r1[i] + r3[i] / x[i];
     }
-    deepCopyvec(r4, r7);
-    ret = solve_(yTrans, &n, &one, QD, &n, ipiv, & *r4.begin(), &n, &info);
+    deepCopyvec(r4, r7, n);
+    solve_(n, one, QL, n, ipiv, r4, n, info);
     r5 = dotprod(KT, r4);
     r6 = r2 + r5;
     dy = -r6 / M;
 
     for(i = 0; i < n; i++)
       r7[i] += e[i] * dy; //(r7 = r4 + e*dy) -- It is a little cryptic over here!
-    ret = solve_(yTrans, &n, &one, QD, &n, ipiv, & *r7.begin(), &n, &info);
-    ret = solve_(nTrans, &n, &one, QD, &n, ipiv, & *r7.begin(), &n, &info);
-    deepCopyvec(r7, dx);
+    solve_(n, one, QL, n, ipiv, r7, n, info);
+    solve_(n, one, QD, n, ipiv, r7, n, info);
+    deepCopyvec(r7, dx, n);
     for(i = 0; i < n; i++)
       dz[i] = (r3[i] - z[i] * dx[i])/x[i];
     /* Determine maximal step possible in the new direction here primal step size */
