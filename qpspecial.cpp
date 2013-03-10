@@ -107,11 +107,25 @@ void cholesky_(char &UPLO, int* N, float*& A, int* LDA, int* INFO){
 }
 
 void solve_(int B, int C, double*& D, int E, int* F, double* G, int H, int I){
-  dgesv_(&B, &C, D, &E, F, G, &H, &I);
+  double* tD = new double[B * B];
+  for(int i = 0; i < B; i++){
+    for(int j = 0; j < B; j++){
+      tD[j * B + i] = D[j * B + i];
+    }
+  }
+  dgesv_(&B, &C, tD, &E, F, G, &H, &I);
+  delete [] tD;
 }
 
 void solve_(int B, int C, float*& D, int E, int* F, float* G, int H, int I){
-  sgesv_(&B, &C, D, &E, F, G, &H, &I);
+  float* tD = new float[B * B];
+  for(int i = 0; i < B; i++){
+    for(int j = 0; j < B; j++){
+      tD[j * B + i] = D[j * B + i];
+    }
+  }
+  sgesv_(&B, &C, tD, &E, F, G, &H, &I);
+  delete [] tD;
 }
 
 template<typename T>
@@ -301,9 +315,7 @@ int qpclass<T>::iterativePhase(){
     deepCopyvec(e, KT, n); //If I solve directly over e in the next step 'e' will be 
                            //overwritten!
     solve_(n, one, QL, n, ipiv, KT, n, info);
-    std::cout << KT[0] << " " << KT[1] << std::endl;
     M = dotprod(KT, KT); // might need to make KT members of the class later?
-
     /* Compute approximate tangent direction using factorization from above */
     T* r4 = new T[n];
     T* dx = new T[n]; //r1 just for the size of the vector, not for the values
@@ -386,9 +398,11 @@ int qpclass<T>::iterativePhase(){
 
     for(i = 0; i < n; i++){
       x[i] += eta * ap * dx[i];    
-      y += eta * ad * dy;
       z[i] += eta * ad * dz[i];
     }
+    std::cout << x[0] << "  " << x[1] << std::endl;
+    std::cout << x[0] << "  " << x[1] << std::endl;
+    y += eta * ad * dy;
   }
   if (maxit == k){
     return(1);
