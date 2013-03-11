@@ -167,6 +167,7 @@ public:
   void postHessian();
   int iterativePhase();
   void printSolution();
+  T* fetchSolution(T*);
 };
 
 template<typename T>
@@ -265,23 +266,30 @@ void qpclass<T>::copyQD(){
 
 template<typename T>
 int qpclass<T>::iterativePhase(){
-  T rs = 0.0, mu = 0.0, r2 = -1.0, M = 0.0, r5, r6, dy;
+  T rs, mu, r2, M, r5, r6, dy, sumx, alpha, beta, muaff, sig;
   //parameters for LAPACK functions
   char yTrans = 'T';
   char nTrans = 'N';
-  char uplo = 'U';
-  T alpha = 1.0, beta = 0.0, muaff = 0.0, sig = 0.0;
-  int one = 1;
+  char Uuplo, Luplo;
+  int one, k, i, retval;
   
   //parameters for interior point method
   T* temp = new T[n];
   T *r1 = new T[n], *r3 = new T[n], *KT = new T[n];
   T *zdx = new T[n], *p = new T[n];
-  int k, i;
+
+  T* r4 = new T[n];
+  T* dx = new T[n]; //r1 just for the size of the vector, not for the values
+  T* dz = new T[n];
+  T* r7 = new T[n];
+  
   for(k = 0; k < maxit; k++){
+    rs = 0.0; mu = 0.0; r2 = -1.0; M = 0.0; sumx = 0.0;
+    alpha = 1.0; beta = 0.0; muaff = 0.0; sig = 0.0;
+    one = 1;
     mmul_(nTrans, nTrans, n, one, n, alpha, Q, n, x, n, beta, temp, n);
     for(i = 0; i < n; i++){
-      r1[i] += -temp[i] + e[i] * y + z[i]; //residual
+      r1[i] = -temp[i] + e[i] * y + z[i]; //residual
       rs = MAX(std::abs(r1[i]), rs);
       r2 += x[i];             //residual
       r3[i] = -(x[i] * z[i]); //slacks
@@ -292,7 +300,8 @@ int qpclass<T>::iterativePhase(){
     /* Stopping if mu and the residual norm is small enough.  All went well */
     if(mu < kmu){
       if(rs < krs){
-	return(0); // succesful execution
+	retval = 0;
+	break;
       }
     }
     
@@ -303,11 +312,12 @@ int qpclass<T>::iterativePhase(){
     }
     
     // Perform Cholesky factorization on QD
-    cholesky_(uplo, &n, QD, &n, &info);
+    Uuplo = 'U';
+    cholesky_(Uuplo, &n, QD, &n, &info);
     if (0 != info)
       return(2);
-    uplo = 'L';
-    cholesky_(uplo, &n, QL, &n, &info);
+    Luplo = 'L';
+    cholesky_(Luplo, &n, QL, &n, &info);
     if (0 != info)
       return(2);
     // Solve a system with QD and e (Notice that the solution will be stored in KT)
@@ -317,15 +327,12 @@ int qpclass<T>::iterativePhase(){
     solve_(n, one, QL, n, ipiv, KT, n, info);
     M = dotprod(KT, KT); // might need to make KT members of the class later?
     /* Compute approximate tangent direction using factorization from above */
-    T* r4 = new T[n];
-    T* dx = new T[n]; //r1 just for the size of the vector, not for the values
-    T* dz = new T[n];
     deepCopyvec(r1, r4, n); deepCopyvec(r1, dx, n); deepCopyvec(r1, dz, n);
     
     for(i = 0; i < n; i++)
       r4[i] += r3[i] / x[i];
     
-    T* r7 = new T[n]; // It needs to be started here because r4 will be destroyed
+    // r7 needs to be started here because r4 will be destroyed
     // next r4 keeps a temporary solution to a system.  So the original r4 ist kaput
     // This is a really bad practice but saves me a lot of memory
     deepCopyvec(r4, r7, n);
@@ -401,28 +408,28 @@ int qpclass<T>::iterativePhase(){
       z[i] += eta * ad * dz[i];
     }
     std::cout << x[0] << "  " << x[1] << std::endl;
-    std::cout << x[0] << "  " << x[1] << std::endl;
     y += eta * ad * dy;
   }
   if (maxit == k){
-    return(1);
+    std::cout << "\nmax. num of iterations reached" << std::endl;
+    retval = 1;
   }
-  T sumx = 0.0;
+  sumx = 0.0;
   for(i = 0; i < n; i++){
     x[i] = MAX(x[i], 0.0);
     sumx += x[i];
   }
   for(i = 0; i < n; i++)
     x[i] /= sumx;
-  d = x;
+  deepCopyvec(x, d, n);
   mmul_(nTrans, nTrans, m, one, n, alpha, G, n, x, n, beta, d, n);
   q = dotprod(d, d);
-  return(0);
+  return(retval);
 }
 
 template<typename T>
 void qpclass<T>::printSolution(){
-  std::cout << "Solution is " << q << std::endl;
+  std::cout << "Global value of the solution is " << q << std::endl;
 }
 
 template<typename T>
@@ -431,14 +438,45 @@ void qpclass<T>::optimization(){
   HessianfromG();
   postHessian();
   ret = iterativePhase();
+  switch(ret){
+  case 0:
+    std::cout << "Solution converged" << std::endl;
+    break;
+  case 1:
+    std::cout << "Solution didn't converge to a global. More iterations are needed" <<
+      std::endl;
+    break;
+  case2:
+    std::cerr << "A good solution was not found" << std::endl;
+    break;
+  default:
+    std::cerr << "Output is undefined" << std::endl;
+    break;
+  }
   std::cout << ret << std::endl;
   printSolution();
 }
 
+template<typename T>
+T* qpclass<T>::fetchSolution(T* ExternSol){
+  // Assumes that the user supplies an empty vector with fully allocated memory
+  for(int i = 0; i < n; i++)
+    ExternSol[i] = x[i];
+  return(ExternSol);
+}
+
 int main(){
   std::cout << "QP special optimizer " << std::endl;
-  double* G = new double[4];
-  G[1] = 1.0; G[2] = 2.0; G[3] = 3.0; G[0] = 4.0;
-  qpclass<double> * myopt = new qpclass<double>(2, 2, G, 100);
+  double* G = new double[9];
+  G[1] = 1.0; G[2] = 2.0; G[3] = 3.0; G[0] = 4.0; G[4] = 3.2; G[5] = 21.0; G[6] = 2.21;
+  G[7] = 0.0; G[8] = 1.122321;
+  qpclass<double> * myopt = new qpclass<double>(3, 3, G, 100);
   myopt->optimization();
+  double* solution = new double[3];
+  
+  myopt->fetchSolution(solution);
+  for(int i = 0; i < 3; i++)
+    std::cout << solution[i] << std::endl;
+  
 }
+
